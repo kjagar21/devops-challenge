@@ -50,6 +50,7 @@ devops-challenge/
 ├── Dockerfile
 ├── index.html
 ├── README.md
+├── .gitignore
 ├── k8s/
 │   ├── deployment.yaml
 │   ├── service.yaml
@@ -64,7 +65,18 @@ devops-challenge/
 │       ├── variables.tf
 │       └── outputs.tf
 ├── diagrams/
+│   ├── 01-roadmap.png
+│   ├── 02-vm-vs-container.png
+│   ├── 03-kubernetes-architecture.png
+│   ├── 04-traffic-flow.png
+│   └── 05-service-types.png
 └── screenshots/
+    ├── app-vm.png
+    ├── app-aks.png
+    ├── azure-vm.png
+    ├── aks-cluster.png
+    ├── docker-desktop.png
+    └── kubectl-output.png
 ```
 
 ---
