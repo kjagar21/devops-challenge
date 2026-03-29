@@ -5,7 +5,13 @@
 
 ## Overview
 
-This repository contains the complete solution for the DevOps Internship Challenge. The project covers provisioning a Linux VM on Azure, containerizing a custom nginx application with Docker, pushing it to Docker Hub, and deploying it to an Azure Kubernetes Service (AKS) cluster exposed publicly via the Traefik ingress controller.
+This repository contains the complete solution for the DevOps Internship Challenge. The project covers provisioning a Linux VM on Azure, containerizing a custom nginx application with Docker, pushing it to Docker Hub, deploying it to an Azure Kubernetes Service (AKS) cluster exposed publicly via the Traefik ingress controller, and defining all infrastructure as code using Terraform.
+
+---
+
+## Challenge Roadmap
+
+![Roadmap](diagrams/01-roadmap.png)
 
 ---
 
@@ -43,11 +49,22 @@ Internet → Azure VM (20.199.137.109:80) → Docker container (nginx)
 devops-challenge/
 ├── Dockerfile
 ├── index.html
+├── README.md
 ├── k8s/
 │   ├── deployment.yaml
 │   ├── service.yaml
 │   └── ingress.yaml
-└── README.md
+├── terraform/
+│   ├── vm/
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   └── aks/
+│       ├── main.tf
+│       ├── variables.tf
+│       └── outputs.tf
+├── diagrams/
+└── screenshots/
 ```
 
 ---
@@ -70,6 +87,12 @@ A Linux VM was provisioned on Azure with the following specifications:
 
 ![Azure VM Overview](screenshots/azure-vm.png)
 
+### Virtual Machines vs Containers
+
+![VM vs Container](diagrams/02-vm-vs-container.png)
+
+Containers share the host OS kernel and package only what the application needs — making them much smaller and faster to start than full VMs.
+
 ### SSH Security
 
 The VM was hardened to use SSH key-based authentication only. Password login was completely disabled by editing `/etc/ssh/sshd_config`:
@@ -89,8 +112,6 @@ sudo systemctl restart ssh
 
 Docker was installed and configured to store all data on a dedicated data disk (`/dev/sdb`, 32 GiB) rather than the OS disk. This is a best practice that prevents Docker data from filling up the OS disk and causing system issues.
 
-The disk was formatted, mounted, and added to `/etc/fstab` for automatic mounting on reboot:
-
 ```bash
 sudo mkfs.ext4 /dev/sdb
 sudo mkdir -p /mnt/docker-data
@@ -106,24 +127,14 @@ Docker was configured to use that disk via `/etc/docker/daemon.json`:
 }
 ```
 
-Verified with:
-```bash
-docker info | grep "Docker Root Dir"
-# Docker Root Dir: /mnt/docker-data
-```
-
 ### Custom Nginx Image
-
-A `Dockerfile` was written to build a custom nginx image that displays my full name in the browser:
 
 ```dockerfile
 FROM nginx:alpine
 COPY index.html /usr/share/nginx/html/index.html
 ```
 
-`nginx:alpine` was chosen as the base image because it is extremely lightweight (~5MB) compared to the full nginx image (~200MB), which is a best practice for production images.
-
-The image was built, tagged and pushed to Docker Hub:
+`nginx:alpine` was chosen as the base image because it is ~5MB vs ~200MB for the full nginx image.
 
 ```bash
 docker build -t moj-nginx .
@@ -137,14 +148,13 @@ Docker Hub: [hub.docker.com/r/karlojagar/moj-nginx](https://hub.docker.com/r/kar
 
 ### Running on the VM
 
-The image was pulled onto the Azure VM and run as a container with `--restart always` so it starts automatically whenever the VM reboots:
-
 ```bash
-docker pull karlojagar/moj-nginx:v2
 docker run -d -p 80:80 --restart always --name moj-nginx karlojagar/moj-nginx:v2
 ```
 
-The application is publicly accessible at: **http://20.199.137.109**
+The `--restart always` flag ensures the container starts automatically on VM reboot.
+
+**http://20.199.137.109**
 
 ![App running on Azure VM](screenshots/app-vm.png)
 
@@ -152,24 +162,22 @@ The application is publicly accessible at: **http://20.199.137.109**
 
 ## Part 2 — Kubernetes
 
-### AKS Cluster
+### Kubernetes Architecture
 
-An Azure Kubernetes Service cluster was provisioned with the following specifications:
+![Kubernetes Architecture](diagrams/03-kubernetes-architecture.png)
+
+### AKS Cluster
 
 | Parameter | Value |
 |---|---|
 | Cluster name | devops-aks |
-| Resource group | devops-challenge-rg |
 | Region | Sweden Central |
 | Kubernetes version | 1.33.7 |
 | Node size | Standard_D2s_v3 |
 | Node count | 1 |
 | Pricing tier | Free |
-| Network configuration | Azure CNI Overlay |
 
 ![AKS Cluster Overview](screenshots/aks-cluster.png)
-
-The local kubectl was connected to the AKS cluster using the Azure CLI:
 
 ```bash
 az aks get-credentials --resource-group devops-challenge-rg --name devops-aks
@@ -178,11 +186,7 @@ kubectl get nodes
 # aks-agentpool-29782353-vmss000000   Ready    <none>   4m    v1.33.7
 ```
 
-> **Note:** On AKS, worker nodes show `<none>` for roles because Azure manages the control plane separately. This is expected behaviour.
-
 ### Deploying the Nginx Image
-
-A Kubernetes Deployment was created to run the nginx image from Docker Hub:
 
 ```yaml
 # deployment.yaml
@@ -207,8 +211,6 @@ spec:
         - containerPort: 80
 ```
 
-A ClusterIP Service was created to allow internal cluster communication:
-
 ```yaml
 # service.yaml
 apiVersion: v1
@@ -224,25 +226,13 @@ spec:
   type: ClusterIP
 ```
 
-```bash
-kubectl apply -f deployment.yaml
-kubectl apply -f service.yaml
-kubectl get pods
-# NAME                                    READY   STATUS    RESTARTS   AGE
-# nginx-deployment-7bbfc56b5b-bxtd8       1/1     Running   0          3m
-```
-
 ### Traefik Ingress Controller
-
-Traefik was installed as the ingress controller using Helm:
 
 ```bash
 helm repo add traefik https://traefik.github.io/charts
 helm repo update
 helm install traefik traefik/traefik --namespace traefik --create-namespace
 ```
-
-An Ingress resource was created to route all incoming traffic to the nginx service:
 
 ```yaml
 # ingress.yaml
@@ -266,64 +256,95 @@ spec:
               number: 80
 ```
 
-```bash
-kubectl apply -f ingress.yaml
-kubectl get svc -n traefik
-# NAME      TYPE           CLUSTER-IP     EXTERNAL-IP     PORT(S)
-# traefik   LoadBalancer   10.0.240.125   9.223.252.236   80:30606/TCP,443:30370/TCP
-```
-
 ![kubectl output](screenshots/kubectl-output.png)
 
-Traefik received public IP `9.223.252.236` from the Azure Load Balancer. The application is publicly accessible at: **http://9.223.252.236**
+**http://9.223.252.236**
 
 ![App on AKS via Traefik](screenshots/app-aks.png)
 
 ---
 
-## Problems & Solutions
+## Bonus — Infrastructure as Code (Terraform)
 
-| Problem | Cause | Solution |
-|---|---|---|
-| Azure VM image dropdown only showed Windows images | The "Free account VM" wizard has a limited marketplace | Used the standard "Virtual machines" flow instead |
-| West Europe region not supported on student subscription | Azure for Students has regional restrictions | Changed region to Switzerland North |
-| Port 80 not accessible from the internet | Azure NSG blocks all ports by default | Added an inbound port rule for HTTP (80) in Azure portal |
-| AKS cluster creation failed — vCPU quota was 0 | Azure for Students has very limited vCPU quotas | Tried multiple regions until finding availability in Sweden Central |
-| minikube not found after winget install | winget did not add minikube to the system PATH | Manually downloaded minikube.exe and added it to PATH |
-| App showing old version after image update | Kubernetes Pod was still using the old image tag | Used `kubectl set image` to update the deployment to v2 |
+Both the VM and AKS cluster are defined as Terraform code, making the entire infrastructure reproducible from scratch with a single command.
+
+### VM (`terraform/vm/`)
+
+Defines: resource group, virtual network, subnet, public IP, network security group (SSH + HTTP rules), network interface, 32GB data disk, and the Linux VM itself.
+
+```bash
+cd terraform/vm
+terraform init
+terraform plan   # preview — shows all 10 resources that would be created
+terraform apply  # provision the infrastructure
+```
+
+Key outputs after apply:
+```
+public_ip_address = "x.x.x.x"
+ssh_command       = "ssh -i ~/.ssh/devops-vm-key.pem devops@x.x.x.x"
+```
+
+### AKS (`terraform/aks/`)
+
+Defines: resource group and AKS cluster with SystemAssigned identity and Azure CNI Overlay networking.
+
+```bash
+cd terraform/aks
+terraform init
+terraform plan
+terraform apply
+```
+
+Key outputs after apply:
+```
+cluster_name     = "devops-aks"
+cluster_endpoint = "https://devops-aks-dns-xxx.hcp.swedencentral.azmk8s.io"
+```
+
+> **Note:** Terraform code was written and validated with `terraform plan` against real Azure credentials. Since the infrastructure was already provisioned manually beforehand, `terraform apply` was not run to avoid creating duplicate resources.
 
 ---
 
 ## Key Concepts
 
 ### What does an ingress controller do?
-An ingress controller is the "gatekeeper" of a Kubernetes cluster. It receives all external HTTP traffic through a single entry point and routes it to the correct internal service based on defined rules. For example, routing `/api` to a backend service and `/` to a frontend service — all through one public IP address.
+An ingress controller is the single entry point for all external HTTP traffic into a Kubernetes cluster. It reads Ingress rules and routes requests to the correct internal service — for example, `/api` to a backend and `/` to a frontend — all through one public IP address. Without it, every service would need its own public IP.
 
 ### What is Traefik's role?
-Traefik is a concrete implementation of an ingress controller. Kubernetes defines the concept of ingress but does not ship a router — you need to install something that does the actual routing. Traefik is one of the most popular options. It automatically discovers services in the cluster and configures itself when new services are added.
+Traefik is a concrete implementation of an ingress controller. Kubernetes defines the ingress concept but does not ship a router. Traefik handles the actual routing and automatically discovers new services in the cluster without manual reconfiguration.
 
 ### How does traffic get from the internet to the container?
-```
-1. User opens http://9.223.252.236 in their browser
-2. Request hits the Azure Load Balancer (the cluster's public face)
-3. Azure Load Balancer forwards to Traefik
-4. Traefik reads the path and routes to the correct service
-5. Kubernetes Service (ClusterIP) finds the correct Pod
-6. Pod (nginx container) responds
-```
+
+![Traffic Flow](diagrams/04-traffic-flow.png)
+
+1. User opens `9.223.252.236` in browser
+2. Azure Load Balancer receives the request (only component with a public IP)
+3. Traefik reads the path and routes according to Ingress rules
+4. Kubernetes ClusterIP Service finds the correct Pod
+5. nginx container responds
 
 ### What is load balancing?
-Load balancing distributes incoming requests across multiple instances of an application so no single instance gets overwhelmed. If one Pod crashes, the load balancer automatically stops sending traffic to it and distributes requests across the remaining healthy ones.
+Distributing incoming requests across multiple instances so no single Pod gets overwhelmed. If a Pod crashes, traffic is automatically redirected to healthy ones. In this setup Azure handles it at the infrastructure level (Load Balancer) and Kubernetes handles it at the application level (Service).
 
 ### ClusterIP vs NodePort vs LoadBalancer
 
-| Type | Accessibility | Use case |
-|---|---|---|
-| ClusterIP | Inside cluster only | Databases, internal services |
-| NodePort | External, on a specific high port | Testing, dev environments |
-| LoadBalancer | Public IP, standard port 80/443 | Production |
+![Service Types](diagrams/05-service-types.png)
 
-In this project: `nginx-service` uses **ClusterIP** (internal only, not exposed directly), while `traefik` uses **LoadBalancer** (gets a real Azure public IP and handles all external traffic).
+In this project: `nginx-service` uses **ClusterIP** (internal), `traefik` uses **LoadBalancer** (public-facing, gets a real Azure IP).
+
+---
+
+## Problems & Solutions
+
+| Problem | What happened | How it was solved |
+|---|---|---|
+| Azure Student subscription had 0 vCPU quota in every region | Tried West Europe, North Europe, East US — all returned quota errors when creating the AKS node pool | Systematically tried every available region; Sweden Central had quota available for Standard_D2s_v3 |
+| West Europe did not support VM creation on student account | Got "Your subscription doesn't support virtual machine creation in West Europe" after filling out the entire VM form | Switched to Switzerland North which worked |
+| Azure portal image dropdown only showed Windows Server images | Landed on the "Free account virtual machine" wizard which has a limited marketplace | Navigated to "Virtual machines" directly and used the full Create flow with access to the complete image marketplace |
+| AKS node pool rejected all B-series VM sizes | B-series VMs cannot be scheduled in AKS node pools | Switched to D-series (Standard_D2s_v3) which is supported |
+| Port 80 was blocked after container was running | Azure Network Security Group denies all inbound traffic by default — no rule for HTTP existed | Added an inbound security rule for TCP port 80 in the VM's NSG through the Azure portal |
+| Terraform could not read the SSH public key file | Only the `.pem` private key was available locally, no `.pub` file | Generated the public key from the private key using `ssh-keygen -y -f devops-vm-key.pem` and embedded it directly in `main.tf` |
 
 ---
 
@@ -331,7 +352,7 @@ In this project: `nginx-service` uses **ClusterIP** (internal only, not exposed 
 
 ```bash
 # Clone the repository
-git clone https://github.com/karlojagar/devops-challenge
+git clone https://github.com/kjagar21/devops-challenge
 cd devops-challenge
 
 # Build and run with Docker
@@ -339,7 +360,7 @@ docker build -t moj-nginx .
 docker run -d -p 8080:80 moj-nginx
 # Open http://localhost:8080
 
-# Or deploy to Kubernetes locally with minikube
+# Deploy to Kubernetes locally with minikube
 minikube start --driver=docker
 kubectl apply -f k8s/
 minikube tunnel
